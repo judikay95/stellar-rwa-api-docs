@@ -12,6 +12,18 @@ controlling **who is allowed to hold it**. This guide explains the compliance
 model end to end: why it exists, how the allowlist works, how the on-chain
 transfer gate is enforced, and how issuers should operate it.
 
+<CalloutBox variant="note" title="Relationship to the contract source">
+This guide is the **conceptual explanation** of behaviour that is authoritatively
+defined and enforced in the Soroban smart contracts. Every concept described here
+maps to a specific function in the
+[Compliance Contract](/docs/contracts/compliance) or the
+[Asset Token Contract](/docs/contracts/asset-token). Where it matters, each
+section links directly to the implementing function so you can read the exact
+on-chain logic, error codes, and authorization rules. If this guide and the
+contract reference ever disagree, the contract reference is authoritative — it
+reflects the deployed code.
+</CalloutBox>
+
 ## Why compliance matters for RWA
 
 A real-world asset — equity in a building, a trade invoice, a warehouse of copper —
@@ -40,12 +52,15 @@ a set of `KycRecord`s, one per address. Each record carries:
 - a **`verified_at`** ledger and an **`expires_at`** ledger (`0` = never expires)
 
 Only the compliance **admin** (the issuer or their compliance officer) can change
-the allowlist, via `add_to_allowlist`, `suspend`, and `remove`. Adding an address
-sets its status to `Approved`; suspending flips it to `Suspended` but keeps the
-record for audit; removing deletes it entirely.
+the allowlist, via [`add_to_allowlist`](/docs/contracts/compliance#add-to-allowlist),
+[`suspend`](/docs/contracts/compliance#suspend), and
+[`remove`](/docs/contracts/compliance#remove). Adding an address sets its status to
+`Approved`; suspending flips it to `Suspended` but keeps the record for audit;
+removing deletes it entirely.
 
-An address is permitted to hold or receive the asset **only if `is_allowed`
-returns `true`**, which requires all three of:
+An address is permitted to hold or receive the asset **only if
+[`is_allowed`](/docs/contracts/compliance#is-allowed) returns `true`**, which
+requires all three of:
 
 1. status is `Approved`,
 2. the approval has not expired, and
@@ -54,8 +69,9 @@ returns `true`**, which requires all three of:
 ## How transfer gating works
 
 This is the mechanism that makes the whole thing enforceable. The asset-token
-contract does not trust any off-chain system; on every `transfer` it makes
-**cross-contract calls** into the compliance contract for *both* parties:
+contract does not trust any off-chain system; on every
+[`transfer`](/docs/contracts/asset-token#transfer) it makes **cross-contract
+calls** into the compliance contract for *both* parties:
 
 ```
 transfer(from, to, amount)
@@ -66,15 +82,16 @@ transfer(from, to, amount)
   └─ move balances + emit event
 ```
 
-If either `is_allowed` returns `false`, the transaction **reverts** — no balance
-moves, no event is emitted, the transfer simply cannot happen. The same check gates
-`mint` on the recipient, so tokens can never be minted into a non-approved wallet
-in the first place.
+If either [`is_allowed`](/docs/contracts/compliance#is-allowed) returns `false`,
+the transaction **reverts** — no balance moves, no event is emitted, the transfer
+simply cannot happen. The same check gates
+[`mint`](/docs/contracts/asset-token#mint) on the recipient, so tokens can never
+be minted into a non-approved wallet in the first place.
 
 Because the asset token depends only on the compliance **interface**
 (`is_allowed`), the concrete compliance contract can be swapped with
-`set_compliance` — for example to migrate to a stricter policy — without
-redeploying the token.
+[`set_compliance`](/docs/contracts/asset-token#set-compliance) — for example to
+migrate to a stricter policy — without redeploying the token.
 
 <CalloutBox variant="tip" title="Verify it yourself">
 Try to transfer the sample asset to an address that isn't on the allowlist. The
@@ -93,15 +110,17 @@ product working — the gate is doing its job.
 ## Jurisdiction restrictions
 
 Beyond per-address control, issuers can block entire **jurisdictions**. Calling
-`block_jurisdiction("US")` makes every approved address whose record says `US` fail
-`is_allowed` immediately — without editing a single individual record. Unblocking
-with `unblock_jurisdiction("US")` restores them.
+[`block_jurisdiction("US")`](/docs/contracts/compliance#block-jurisdiction--unblock-jurisdiction--is-jurisdiction-blocked)
+makes every approved address whose record says `US` fail `is_allowed` immediately —
+without editing a single individual record. Unblocking with
+[`unblock_jurisdiction("US")`](/docs/contracts/compliance#block-jurisdiction--unblock-jurisdiction--is-jurisdiction-blocked)
+restores them.
 
 This models a common real-world requirement: a regulatory change, sanction, or
 offering restriction that must apply to a whole country at once. Because the check
-happens inside `is_allowed` at read time, the effect is **instantaneous and
-retroactive** — there is no list to re-scan and no window where stale approvals
-still work.
+happens inside [`is_allowed`](/docs/contracts/compliance#is-allowed) at read time,
+the effect is **instantaneous and retroactive** — there is no list to re-scan and
+no window where stale approvals still work.
 
 The API's [`/assets/:id/compliance`](/docs/api/compliance) endpoint surfaces the
 jurisdiction distribution (as counts) so issuers can audit their geographic
@@ -111,22 +130,26 @@ exposure before making such a change.
 
 Approvals are not forever. Two mechanisms let issuers keep the allowlist current:
 
-- **Expiry.** `add_to_allowlist` takes an `expires_at` ledger. Once the current
-  ledger reaches it, `is_allowed` returns `false` automatically — the holder can no
-  longer transfer, and cannot receive more, until re-approved. An `expires_at` of
-  `0` means the approval never expires. Because time is measured in **ledger
-  sequence numbers** (~5 seconds each), a one-year approval is roughly
-  `+6,300,000` ledgers from now.
+- **Expiry.** [`add_to_allowlist`](/docs/contracts/compliance#add-to-allowlist)
+  takes an `expires_at` ledger. Once the current ledger reaches it,
+  [`is_allowed`](/docs/contracts/compliance#is-allowed) returns `false`
+  automatically — the holder can no longer transfer, and cannot receive more, until
+  re-approved. An `expires_at` of `0` means the approval never expires. Because
+  time is measured in **ledger sequence numbers** (~5 seconds each), a one-year
+  approval is roughly `+6,300,000` ledgers from now.
 
-- **Suspension.** `suspend(address)` sets the status to `Suspended` while keeping
-  the record. This is the right tool for a temporary hold — a pending re-review, a
-  compliance flag — because it is reversible with `add_to_allowlist` and preserves
-  the audit trail. Use `remove` only when an address should be erased entirely.
+- **Suspension.** [`suspend(address)`](/docs/contracts/compliance#suspend) sets
+  the status to `Suspended` while keeping the record. This is the right tool for a
+  temporary hold — a pending re-review, a compliance flag — because it is
+  reversible with `add_to_allowlist` and preserves the audit trail. Use
+  [`remove`](/docs/contracts/compliance#remove) only when an address should be
+  erased entirely.
 
 <CalloutBox variant="warning" title="Expiry is enforced on read, not on a timer">
 There is no background job expiring records. The check is evaluated live against
-the current ledger every time `is_allowed` runs. An approval that lapsed one second
-ago fails the very next transfer — no cron, no lag.
+the current ledger every time
+[`is_allowed`](/docs/contracts/compliance#is-allowed) runs. An approval that
+lapsed one second ago fails the very next transfer — no cron, no lag.
 </CalloutBox>
 
 ## Worked scenarios
@@ -142,29 +165,37 @@ checks both the sender and recipient, so the error identifies which side failed.
 | **Blocked jurisdiction** | The address has an otherwise valid approval, but its recorded jurisdiction is currently blocked. | The jurisdiction check makes `is_allowed` return `false` immediately. Transfers from that holder fail with `SenderNotCompliant (7)` and transfers to them fail with `RecipientNotCompliant (8)`. Review the restriction before unblocking the jurisdiction or changing an individual's record. |
 
 In all four cases, an off-chain status display is not a substitute for the
-contract check: use `is_allowed` for the asset's current compliance contract
-before submitting a transfer. The transaction itself remains authoritative and
-will revert if either party fails the gate.
+contract check: use [`is_allowed`](/docs/contracts/compliance#is-allowed) for the
+asset's current compliance contract before submitting a transfer. The transaction
+itself remains authoritative and will revert if either party fails the gate.
 
 ## Best practices for issuers
 
 1. **Secure the compliance admin key.** It is the single most powerful key in the
    system — it decides who can hold your asset. Use multisig and hardware custody.
-2. **Prefer `suspend` over `remove`.** Suspension is reversible and preserves the
-   record for audits; removal is destructive.
+2. **Prefer [`suspend`](/docs/contracts/compliance#suspend) over
+   [`remove`](/docs/contracts/compliance#remove).** Suspension is reversible and
+   preserves the record for audits; removal is destructive.
 3. **Set sensible expiries.** Time-bounded approvals force periodic re-KYC and keep
    your allowlist from silently drifting out of date. Choose an expiry that matches
-   your re-verification cadence.
-4. **Approve the issuer first.** The asset token mints the initial supply to the
-   admin, so the admin must be approved on the compliance contract *before*
+   your re-verification cadence. See
+   [`add_to_allowlist`](/docs/contracts/compliance#add-to-allowlist) for the
+   `expires_at` parameter.
+4. **Approve the issuer first.** The asset token
+   [`initialize`](/docs/contracts/asset-token#initialize) mints the initial supply
+   to the admin, so the admin must be approved on the compliance contract *before*
    `initialize`, or deployment fails with `RecipientNotCompliant`.
 5. **Coordinate distributions with balances.** The dividend contract reads balances
    at **claim** time. If you need a clean snapshot, consider pausing the token
-   around a distribution window. See the [Dividend contract](/docs/contracts/dividend#security-considerations).
+   around a distribution window. See
+   [`pause`](/docs/contracts/asset-token#pause--unpause) and the
+   [Dividend contract](/docs/contracts/dividend#security-considerations).
 6. **Use jurisdiction blocks deliberately.** They are immediate and affect every
-   holder in the region. Review the jurisdiction breakdown from the API first.
-7. **Treat registry listing as self-attestation.** Anyone can register an asset;
-   the *binding* control is the compliance contract, not the registry entry.
+   holder in the region. Review the jurisdiction breakdown from the API first. See
+   [`block_jurisdiction`](/docs/contracts/compliance#block-jurisdiction--unblock-jurisdiction--is-jurisdiction-blocked).
+7. **Treat registry listing as self-attestation.** Anyone can register an asset via
+   [`register_asset`](/docs/contracts/registry#register-asset); the *binding*
+   control is the compliance contract, not the registry entry.
 
 ## Putting it together
 
